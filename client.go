@@ -46,24 +46,25 @@ func (c *Client) SetFormat(format string) {
 }
 
 // digest builds the HMAC-SHA256 digest for the request.
-// Message is: lower(resource:action[:params]):Date (RFC 1123).
-func (c *Client) digest(resource, action string, params url.Values) (string, string) {
-	date := time.Now().UTC().Format(time.RFC1123)
+// Message is: lower(resource:action[:rawQuery]):Date (date as in Date header).
+// rawQuery should be the exact query string used in the URL (e.g. "citizenId=123"); it will be lowercased in the message.
+func (c *Client) digest(resource, action, rawQuery string) (digestHex, dateStr string) {
+	// RFC 1123 (e.g. "Tue, 04 Sep 2012 15:57:48 GMT") — same as PHP gmdate(DATE_RFC1123)
+	dateStr = time.Now().UTC().Format(time.RFC1123)
 	resource = strings.ToLower(resource)
 	action = strings.ToLower(action)
 
 	var msg string
-	if len(params) == 0 {
-		msg = strings.ToLower(resource+":"+action) + ":" + date
+	if rawQuery == "" {
+		msg = resource + ":" + action + ":" + dateStr
 	} else {
-		encoded := params.Encode()
-		msg = strings.ToLower(resource+":"+action+":"+encoded) + ":" + date
+		msg = resource + ":" + action + ":" + strings.ToLower(rawQuery) + ":" + dateStr
 	}
 
 	mac := hmac.New(sha256.New, []byte(c.secretKey))
 	mac.Write([]byte(msg))
-	digest := hex.EncodeToString(mac.Sum(nil))
-	return digest, date
+	digestHex = hex.EncodeToString(mac.Sum(nil))
+	return digestHex, dateStr
 }
 
 // Call performs an authenticated request to resource/action with optional query params.
@@ -79,15 +80,17 @@ func (c *Client) RawCall(resource, action string, params map[string]string) ([]b
 		return nil, err
 	}
 
-	q := make(url.Values)
-	for k, v := range params {
-		q.Set(k, v)
-	}
-	if len(q) > 0 {
-		u.RawQuery = q.Encode()
+	rawQuery := ""
+	if len(params) > 0 {
+		q := make(url.Values)
+		for k, v := range params {
+			q.Set(k, v)
+		}
+		rawQuery = q.Encode()
+		u.RawQuery = rawQuery
 	}
 
-	digest, dateStr := c.digest(resource, action, q)
+	digest, dateStr := c.digest(resource, action, rawQuery)
 
 	req, err := http.NewRequest(http.MethodGet, u.String(), nil)
 	if err != nil {
